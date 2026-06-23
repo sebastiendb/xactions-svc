@@ -1,0 +1,14 @@
+{
+  "name": "xactions-svc",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Microservice mince autour de XActions : publication X/Twitter + stats via l'API interne (cookies auth_token+ct0), appelé par PurrPlan.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "xactions": "^3.1.0"
+  }
+}
