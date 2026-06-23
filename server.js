@@ -14,6 +14,8 @@ import {
   postThread,
   deleteTweet,
   scrapeTweetById,
+  scrapeProfileById,
+  scrapeTweets,
   uploadMedia,
 } from 'xactions/scrapers/twitter/http'
 
@@ -107,6 +109,34 @@ app.post('/tweet/stats', async (req, res) => {
     if (!cookies || !id) return res.status(400).json({ ok: false, error: 'cookies and id required' })
     const tweet = await scrapeTweetById(clientFor(cookies), id)
     res.json({ ok: true, tweet })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String((e && e.message) || e) })
+  }
+})
+
+// Mes tweets récents (pour stats + gestion). userId déduit du cookie `twid`.
+app.post('/me/tweets', async (req, res) => {
+  try {
+    const cookies = cookieString(req.body.cookies)
+    if (!cookies) return res.status(400).json({ ok: false, error: 'cookies required' })
+    const client = clientFor(cookies)
+    const twid = (cookies.match(/twid=([^;]+)/) || [])[1] || ''
+    const uid = decodeURIComponent(twid).replace(/^u[=:]/, '')
+    if (!uid) return res.status(400).json({ ok: false, error: 'twid cookie required to resolve user' })
+    const profile = await scrapeProfileById(client, uid)
+    const username = profile && (profile.username || profile.screen_name)
+    const tweets = await scrapeTweets(client, username, { limit: req.body.limit || 20 })
+    res.json({
+      ok: true,
+      username,
+      tweets: (tweets || []).map((t) => ({
+        id: t.id || t.rest_id || (t.legacy && t.legacy.id_str),
+        text: t.text || t.full_text || (t.legacy && t.legacy.full_text) || '',
+        metrics: t.metrics || t.public_metrics || (t.legacy ? {
+          likes: t.legacy.favorite_count, retweets: t.legacy.retweet_count, replies: t.legacy.reply_count, quotes: t.legacy.quote_count,
+        } : null),
+      })),
+    })
   } catch (e) {
     res.status(500).json({ ok: false, error: String((e && e.message) || e) })
   }
