@@ -17,7 +17,12 @@ import {
   scrapeProfileById,
   scrapeTweets,
   uploadMedia,
+  BEARER_TOKEN,
+  GRAPHQL,
+  buildGraphQLUrl,
+  DEFAULT_FEATURES,
 } from 'xactions/scrapers/twitter/http'
+import { ProxyAgent } from 'undici'
 
 const app = express()
 app.use(express.json({ limit: '4mb' }))
@@ -137,6 +142,35 @@ app.post('/me/tweets', async (req, res) => {
         } : null),
       })),
     })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String((e && e.message) || e) })
+  }
+})
+
+// DEBUG : capture le corps BRUT de la réponse X pour une lecture (diagnostic du
+// 403/404 — voir si c'est un queryId périmé, un souci de features, ou autre).
+app.post('/debug/read', async (req, res) => {
+  try {
+    const cookies = cookieString(req.body.cookies)
+    const userId = (req.body.userId || '').toString()
+    const ct0 = (cookies.match(/ct0=([^;]+)/) || [])[1] || ''
+    const { queryId, operationName } = GRAPHQL.UserByRestId
+    const url = buildGraphQLUrl(queryId, operationName, { userId, withSafetyModeUserFields: true }, DEFAULT_FEATURES)
+    const headers = {
+      authorization: 'Bearer ' + decodeURIComponent(BEARER_TOKEN),
+      'x-csrf-token': ct0,
+      'x-twitter-auth-type': 'OAuth2Session',
+      'x-twitter-active-user': 'yes',
+      'x-twitter-client-language': 'en',
+      'content-type': 'application/json',
+      accept: '*/*',
+      cookie: cookies,
+    }
+    const opts = { headers }
+    if (PROXY) opts.dispatcher = new ProxyAgent(PROXY)
+    const r = await fetch(url, opts)
+    const body = await r.text()
+    res.json({ status: r.status, queryId, operationName, url: url.slice(0, 120), body: body.slice(0, 800) })
   } catch (e) {
     res.status(500).json({ ok: false, error: String((e && e.message) || e) })
   }
