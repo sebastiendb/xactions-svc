@@ -1,19 +1,24 @@
 // Microservice mince autour de XActions (nirholas/XActions, lib `xactions`).
-// Publie sur X/Twitter + lit les stats via l'API INTERNE de X (GraphQL CreateTweet,
-// cookies auth_token+ct0 — pas de navigateur). Appelé par PurrPlan, par compte.
+// Publie sur X/Twitter (texte, médias, threads, replies) + lit les stats + supprime,
+// via l'API INTERNE de X (GraphQL, cookies auth_token+ct0 — pas de navigateur).
+// Appelé par PurrPlan, par compte. Auth Bearer (XACTIONS_API_KEY). Sortie via proxy
+// résidentiel optionnel (XACTIONS_PROXY) pour une IP cohérente avec les cookies
+// (sinon X renvoie l'erreur 226 « automated »).
 //
-// Auth : Bearer (clé partagée XACTIONS_API_KEY), comme l'instance camofox.
-// Cookies du compte passés PAR REQUÊTE (multi-tenant). Proxy résidentiel optionnel
-// (XACTIONS_PROXY) pour faire sortir les appels sur une IP cohérente avec les cookies.
+// On utilise TwitterHttpClient + fonctions directes (PAS createHttpScraper, qui
+// appelle verify_credentials = 404 chez X aujourd'hui).
 import express from 'express'
-// On utilise le client HTTP bas-niveau directement (pas createHttpScraper) :
-// celui-ci appelle loginWithCookies → validateSession (verify_credentials), un
-// endpoint X désormais en 404. Le client brut pose juste les cookies (auth_token +
-// ct0) et postTweet/scrapeTweetById n'ont PAS besoin de cette vérif.
-import { TwitterHttpClient, postTweet, postThread, scrapeTweetById } from 'xactions/scrapers/twitter/http'
+import {
+  TwitterHttpClient,
+  postTweet,
+  postThread,
+  deleteTweet,
+  scrapeTweetById,
+  uploadMedia,
+} from 'xactions/scrapers/twitter/http'
 
 const app = express()
-app.use(express.json({ limit: '2mb' }))
+app.use(express.json({ limit: '4mb' }))
 
 const API_KEY = process.env.XACTIONS_API_KEY || ''
 const PROXY = process.env.XACTIONS_PROXY || undefined
@@ -28,7 +33,6 @@ app.use((req, res, next) => {
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'xactions-svc' }))
 
-// Accepte cookies en string "auth_token=..; ct0=.." ou en objet {auth_token, ct0}.
 function cookieString(c) {
   if (typeof c === 'string') return c
   if (c && typeof c === 'object') return Object.entries(c).map(([k, v]) => `${k}=${v}`).join('; ')
@@ -39,35 +43,83 @@ function clientFor(cookies) {
   return new TwitterHttpClient({ cookies, proxy: PROXY })
 }
 
-// Publier un tweet (ou un thread si `tweets` fourni).
+// Identifiant d'un tweet à partir de l'objet renvoyé par CreateTweet.
+function tweetId(result) {
+  return (result && (result.rest_id || (result.legacy && result.legacy.id_str) || result.id_str || result.id)) || null
+}
+
+// Télécharge des URLs média et les upload via XActions → media_ids.
+async function uploadMediaUrls(client, urls) {
+  const ids = []
+  for (const url of (urls || [])) {
+    const resp = await fetch(url)
+    if (!resp.ok) throw new Error(`media fetch ${resp.status} ${url}`)
+    const buf = Buffer.from(await resp.arrayBuffer())
+    const mediaType = resp.headers.get('content-type') || undefined
+    const r = await uploadMedia(client, buf, mediaType ? { mediaType } : {})
+    const id = (r && (r.media_id_string || r.mediaIdString || r.media_id || r.id)) || (typeof r === 'string' ? r : null)
+    if (id) ids.push(String(id))
+  }
+  return ids
+}
+
+// Publier un tweet (texte + médias + reply) ou un thread.
 app.post('/tweet', async (req, res) => {
   try {
     const cookies = cookieString(req.body.cookies)
     if (!cookies) return res.status(400).json({ ok: false, error: 'cookies required (auth_token + ct0)' })
     const client = clientFor(cookies)
 
+    // Thread : [{text, mediaUrls?}]
     if (Array.isArray(req.body.tweets) && req.body.tweets.length) {
-      const result = await postThread(client, req.body.tweets)
-      return res.json({ ok: true, result })
+      const prepared = []
+      for (const t of req.body.tweets) {
+        const mediaIds = await uploadMediaUrls(client, t.mediaUrls)
+        prepared.push({ text: (t.text || '').toString(), mediaIds })
+      }
+      const results = await postThread(client, prepared)
+      const ids = (results || []).map(tweetId)
+      return res.json({ ok: true, ids, id: ids[0] || null, results })
     }
+
     const text = (req.body.text || '').toString()
-    if (!text.trim()) return res.status(400).json({ ok: false, error: 'text required' })
-    const result = await postTweet(client, text, req.body.options || {})
-    res.json({ ok: true, result })
+    const mediaIds = await uploadMediaUrls(client, req.body.mediaUrls)
+    if (!text.trim() && !mediaIds.length) return res.status(400).json({ ok: false, error: 'text or media required' })
+
+    const options = { mediaIds }
+    if (req.body.replyTo) options.replyTo = String(req.body.replyTo)
+    if (req.body.quoteTweetId) options.quoteTweetId = String(req.body.quoteTweetId)
+    if (req.body.premium) options.premium = true
+
+    const result = await postTweet(client, text, options)
+    const id = tweetId(result)
+    res.json({ ok: true, id, url: id ? `https://x.com/i/web/status/${id}` : null, result })
   } catch (e) {
     res.status(500).json({ ok: false, error: String((e && e.message) || e) })
   }
 })
 
-// Stats d'un tweet (public metrics : likes, retweets, replies, views…).
+// Stats d'un tweet (likes, retweets, replies, views…).
 app.post('/tweet/stats', async (req, res) => {
   try {
     const cookies = cookieString(req.body.cookies)
     const id = (req.body.id || '').toString()
     if (!cookies || !id) return res.status(400).json({ ok: false, error: 'cookies and id required' })
-    const client = clientFor(cookies)
-    const tweet = await scrapeTweetById(client, id)
+    const tweet = await scrapeTweetById(clientFor(cookies), id)
     res.json({ ok: true, tweet })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String((e && e.message) || e) })
+  }
+})
+
+// Supprimer un tweet.
+app.post('/tweet/delete', async (req, res) => {
+  try {
+    const cookies = cookieString(req.body.cookies)
+    const id = (req.body.id || '').toString()
+    if (!cookies || !id) return res.status(400).json({ ok: false, error: 'cookies and id required' })
+    const result = await deleteTweet(clientFor(cookies), id)
+    res.json({ ok: true, result })
   } catch (e) {
     res.status(500).json({ ok: false, error: String((e && e.message) || e) })
   }
