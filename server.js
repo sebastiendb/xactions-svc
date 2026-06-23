@@ -6,7 +6,11 @@
 // Cookies du compte passés PAR REQUÊTE (multi-tenant). Proxy résidentiel optionnel
 // (XACTIONS_PROXY) pour faire sortir les appels sur une IP cohérente avec les cookies.
 import express from 'express'
-import { createHttpScraper } from 'xactions/scrapers/twitter/http'
+// On utilise le client HTTP bas-niveau directement (pas createHttpScraper) :
+// celui-ci appelle loginWithCookies → validateSession (verify_credentials), un
+// endpoint X désormais en 404. Le client brut pose juste les cookies (auth_token +
+// ct0) et postTweet/scrapeTweetById n'ont PAS besoin de cette vérif.
+import { TwitterHttpClient, postTweet, postThread, scrapeTweetById } from 'xactions/scrapers/twitter/http'
 
 const app = express()
 app.use(express.json({ limit: '2mb' }))
@@ -31,8 +35,8 @@ function cookieString(c) {
   return ''
 }
 
-async function scraperFor(cookies) {
-  return createHttpScraper({ cookies, proxy: PROXY })
+function clientFor(cookies) {
+  return new TwitterHttpClient({ cookies, proxy: PROXY })
 }
 
 // Publier un tweet (ou un thread si `tweets` fourni).
@@ -40,15 +44,15 @@ app.post('/tweet', async (req, res) => {
   try {
     const cookies = cookieString(req.body.cookies)
     if (!cookies) return res.status(400).json({ ok: false, error: 'cookies required (auth_token + ct0)' })
-    const scraper = await scraperFor(cookies)
+    const client = clientFor(cookies)
 
     if (Array.isArray(req.body.tweets) && req.body.tweets.length) {
-      const result = await scraper.postThread(req.body.tweets)
+      const result = await postThread(client, req.body.tweets)
       return res.json({ ok: true, result })
     }
     const text = (req.body.text || '').toString()
     if (!text.trim()) return res.status(400).json({ ok: false, error: 'text required' })
-    const result = await scraper.postTweet(text, req.body.options || {})
+    const result = await postTweet(client, text, req.body.options || {})
     res.json({ ok: true, result })
   } catch (e) {
     res.status(500).json({ ok: false, error: String((e && e.message) || e) })
@@ -61,8 +65,8 @@ app.post('/tweet/stats', async (req, res) => {
     const cookies = cookieString(req.body.cookies)
     const id = (req.body.id || '').toString()
     if (!cookies || !id) return res.status(400).json({ ok: false, error: 'cookies and id required' })
-    const scraper = await scraperFor(cookies)
-    const tweet = await scraper.scrapeTweetById(id)
+    const client = clientFor(cookies)
+    const tweet = await scrapeTweetById(client, id)
     res.json({ ok: true, tweet })
   } catch (e) {
     res.status(500).json({ ok: false, error: String((e && e.message) || e) })
