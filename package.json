@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "express": "^4.19.2",
+    "undici": "^6.21.0",
     "xactions": "^3.1.0"
   }
 }
