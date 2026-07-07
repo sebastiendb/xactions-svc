@@ -81,7 +81,9 @@ app.post('/tweet', async (req, res) => {
       }
       const results = await postThread(client, prepared)
       const ids = (results || []).map(tweetId)
-      return res.json({ ok: true, ids, id: ids[0] || null, results })
+      // ok reflète la RÉALITÉ : au moins un tweet créé (id non nul). X peut renvoyer
+      // 200 sans créer le tweet → id null → ce n'est PAS un succès.
+      return res.json({ ok: ids.some(Boolean), ids, id: ids[0] || null, results })
     }
 
     const text = (req.body.text || '').toString()
@@ -95,7 +97,13 @@ app.post('/tweet', async (req, res) => {
 
     const result = await postTweet(client, text, options)
     const id = tweetId(result)
-    res.json({ ok: true, id, url: id ? `https://x.com/i/web/status/${id}` : null, result })
+    // Si X n'a pas renvoyé d'id, le tweet N'A PAS été créé (souvent 200 + errors
+    // avalés en amont, ou tweet_results vide) → ok:false + error explicite, pas un
+    // faux succès. Le patch lib (patch-xactions.cjs) fait remonter le motif exact de X.
+    if (!id) {
+      return res.status(502).json({ ok: false, error: 'x_no_tweet_id', result })
+    }
+    res.json({ ok: true, id, url: `https://x.com/i/web/status/${id}`, result })
   } catch (e) {
     res.status(500).json({ ok: false, error: String((e && e.message) || e) })
   }
