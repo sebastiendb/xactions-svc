@@ -18,6 +18,7 @@ import {
   scrapeTweets,
   uploadMedia,
 } from 'xactions/scrapers/twitter/http'
+import { browserFetch, transportSelfTest } from './browser-transport.js'
 
 const app = express()
 app.use(express.json({ limit: '4mb' }))
@@ -35,6 +36,18 @@ app.use((req, res, next) => {
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'xactions-svc' }))
 
+// Diagnostic du transport : IP de sortie RÉELLE, empreinte TLS (JA4) et
+// disponibilité du transaction-id. Sert à vérifier d'un coup d'œil qu'on sort bien
+// par l'IP résidentielle avec une signature Chrome (et pas par le datacenter en
+// signature Node, ce qui faisait flagger le compte). Auth requise.
+app.get('/transport', async (req, res) => {
+  try {
+    res.json({ ok: true, ...(await transportSelfTest()) })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String((e && e.message) || e) })
+  }
+})
+
 function cookieString(c) {
   if (typeof c === 'string') return c
   if (c && typeof c === 'object') return Object.entries(c).map(([k, v]) => `${k}=${v}`).join('; ')
@@ -42,7 +55,11 @@ function cookieString(c) {
 }
 
 function clientFor(cookies) {
-  return new TwitterHttpClient({ cookies, proxy: PROXY })
+  // `fetch: browserFetch` = TOUT le trafic X part avec l'empreinte TLS/HTTP2 de
+  // Chrome, par le proxy résidentiel, avec les en-têtes d'un vrai client x.com
+  // (dont x-client-transaction-id). ⚠️ `proxy:` est conservé pour mémoire mais la
+  // lib ne l'applique PAS (no-op vérifié en prod) : c'est notre fetch qui proxifie.
+  return new TwitterHttpClient({ cookies, proxy: PROXY, fetch: browserFetch })
 }
 
 // Identifiant d'un tweet à partir de l'objet renvoyé par CreateTweet.

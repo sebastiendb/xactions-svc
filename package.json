@@ -9,6 +9,9 @@
   },
   "dependencies": {
     "express": "^4.19.2",
+    "impit": "^0.14.3",
+    "linkedom": "^0.18.9",
+    "x-client-transaction-id": "^0.3.1",
     "xactions": "^3.1.0"
   }
 }

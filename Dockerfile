@@ -1,5 +1,8 @@
 # Microservice XActions (publication X + stats via API interne, sans navigateur).
-FROM node:20-slim
+# Node 22 minimum : le générateur de `x-client-transaction-id` utilise
+# ArrayBuffer.prototype.transfer, absent de Node 20 (échec « output.buffer.transfer
+# is not a function » vérifié).
+FROM node:22-slim
 
 WORKDIR /app
 
@@ -22,7 +25,11 @@ RUN node /tmp/patch-xactions.cjs \
     && grep -q "X GraphQL error" /app/node_modules/xactions/src/scrapers/twitter/http/client.js \
     || (echo "ERREUR: patch xactions non applique" && exit 1)
 
-COPY server.js ./
+COPY server.js browser-transport.js ./
+
+# Garde de build : le transport durci doit charger (impit = module natif Rust, il
+# doit avoir un binaire prébuilt pour cette plateforme) et exposer browserFetch.
+RUN node -e "import('./browser-transport.js').then(m => { if (typeof m.browserFetch !== 'function') { throw new Error('browserFetch absent'); } console.log('transport OK'); }).catch(e => { console.error('ERREUR transport:', e.message); process.exit(1); })"
 
 EXPOSE 3001
 CMD ["node", "server.js"]
