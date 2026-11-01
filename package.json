@@ -13,5 +13,10 @@
     "linkedom": "^0.18.9",
     "x-client-transaction-id": "^0.3.1",
     "xactions": "^3.1.0"
+  },
+  "overrides": {
+    "nodemailer": "^10.0.6",
+    "basic-ftp": "^6.2.1",
+    "@rspack/core": "^2.3.0"
   }
 }
