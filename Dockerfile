@@ -35,5 +35,9 @@ RUN node -e "import('./browser-transport.js').then(m => { if (typeof m.browserFe
 # picomatch, pacote, sigstore, ip-address de npm lui-même, signalés par trivy).
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
+# Exécution sans root : /app reste propriété de root (lecture seule pour node, le
+# service n'écrit rien sur disque) et le port 3001 > 1024 ne demande aucun privilège.
+USER node
+
 EXPOSE 3001
 CMD ["node", "server.js"]
