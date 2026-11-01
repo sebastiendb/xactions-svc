@@ -14,8 +14,8 @@ ENV PUPPETEER_SKIP_DOWNLOAD=1 \
     NODE_ENV=production \
     PORT=3001
 
-COPY package.json ./
-RUN npm install --omit=dev --no-audit --no-fund
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
 
 # Patch lib : remonter les erreurs GraphQL de X sur les mutations (sinon échec opaque
 # « xactions:unknown » quand X refuse silencieusement une écriture). Échoue le build si
@@ -30,6 +30,10 @@ COPY server.js browser-transport.js ./
 # Garde de build : le transport durci doit charger (impit = module natif Rust, il
 # doit avoir un binaire prébuilt pour cette plateforme) et exposer browserFetch.
 RUN node -e "import('./browser-transport.js').then(m => { if (typeof m.browserFetch !== 'function') { throw new Error('browserFetch absent'); } console.log('transport OK'); }).catch(e => { console.error('ERREUR transport:', e.message); process.exit(1); })"
+
+# L'exécution n'a pas besoin de npm : on retire l'outillage npm embarqué (brace-expansion,
+# picomatch, pacote, sigstore, ip-address de npm lui-même, signalés par trivy).
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 EXPOSE 3001
 CMD ["node", "server.js"]
